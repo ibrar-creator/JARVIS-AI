@@ -1,7 +1,14 @@
+
 import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 
 type ChatMessage = {
+  role: 'user' | 'assistant'
+  content: string
+}
+
+type StoredMessage = {
+  id: number
   role: 'user' | 'assistant'
   content: string
 }
@@ -12,6 +19,25 @@ type AIResponse = {
   error?: string
 }
 
+type Conversation = {
+  id: string
+  title: string
+ messages: StoredMessage[]
+  createdAt: number
+  updatedAt: number
+}
+
+type ConversationResult = {
+  ok: boolean
+  conversations: Conversation[]
+  error?: string
+}
+
+type OperationResult = {
+  ok: boolean
+  error?: string
+}
+
 const jarvisApi = {
   getAppVersion: (): Promise<string> => {
     return ipcRenderer.invoke('jarvis:get-app-version')
@@ -19,6 +45,20 @@ const jarvisApi = {
 
   sendMessage: (messages: ChatMessage[]): Promise<AIResponse> => {
     return ipcRenderer.invoke('jarvis:send-message', messages)
+  },
+
+  getConversations: (): Promise<ConversationResult> => {
+    return ipcRenderer.invoke('jarvis:get-conversations')
+  },
+
+  saveConversation: (
+    conversation: Conversation
+  ): Promise<OperationResult> => {
+    return ipcRenderer.invoke('jarvis:save-conversation', conversation)
+  },
+
+  deleteConversation: (id: string): Promise<OperationResult> => {
+    return ipcRenderer.invoke('jarvis:delete-conversation', id)
   }
 }
 

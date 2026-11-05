@@ -16,16 +16,24 @@ $ npm install
 
 ### Configure the AI
 
-Create `apps/desktop/.env` for development and add your Anthropic API key:
+Create `apps/desktop/.env` for development and add your Gemini API key:
 
 ```env
-ANTHROPIC_API_KEY=your_api_key
-ANTHROPIC_MODEL=claude-sonnet-4-5
+GEMINI_API_KEY=your_api_key
+GEMINI_MODEL=gemini-3.8-flash
 ```
 
 For a packaged app, put the same `.env` file in the app's Electron user-data
-folder, or set `ANTHROPIC_API_KEY` in the environment before launching the app.
-The model setting is optional; the app defaults to `claude-sonnet-4-5`.
+folder, or set `GEMINI_API_KEY` in the environment before launching the app.
+The model setting is optional; the app defaults to `gemini-3.8-flash`.
+
+### Voice assistant
+
+Use the microphone button beside the chat input for speech-to-text, choosing English,
+Urdu, or Roman Urdu first. The browser's speech recognition service may require an
+internet connection and may transcribe Urdu speech using Urdu script. Turn on the
+speaker button to have new JARVIS replies read aloud; spoken output uses the
+system's available speech voices.
 
 ### Development
 

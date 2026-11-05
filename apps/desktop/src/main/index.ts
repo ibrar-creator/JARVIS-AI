@@ -1,40 +1,116 @@
 import dotenv from 'dotenv'
-import { app, shell, BrowserWindow, ipcMain } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, session, type WebContents } from 'electron'
 import { join } from 'path'
+import { promises as fs } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 
 dotenv.config({
   path: join(__dirname, '../../.env')
 })
-
-function getAnthropicApiKey(): string | undefined {
-  dotenv.config({ path: join(app.getPath('userData'), '.env') })
-
-  return process.env.ANTHROPIC_API_KEY?.trim() || undefined
+type StoredMessage = {
+  id: number
+  role: 'user' | 'assistant'
+  content: string
 }
 
-function getAnthropicMessage(payload: unknown): string | undefined {
+type Conversation = {
+  id: string
+  title: string
+  messages: StoredMessage[]
+  createdAt: number
+  updatedAt: number
+}
+
+function getConversationsPath(): string {
+  return join(app.getPath('userData'), 'conversations.json')
+}
+
+async function readConversations(): Promise<Conversation[]> {
+  const filePath = getConversationsPath()
+
+  try {
+    const data = await fs.readFile(filePath, 'utf-8')
+    const parsed: unknown = JSON.parse(data)
+
+    if (!Array.isArray(parsed)) {
+      return []
+    }
+
+    return parsed as Conversation[]
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return []
+    }
+
+    throw error
+  }
+}
+
+async function writeConversations(
+  conversations: Conversation[]
+): Promise<void> {
+  const filePath = getConversationsPath()
+  const temporaryPath = `${filePath}.tmp`
+
+  await fs.writeFile(
+    temporaryPath,
+    JSON.stringify(conversations, null, 2),
+    'utf-8'
+  )
+
+  await fs.rename(temporaryPath, filePath)
+}
+function getGeminiApiKey(): string | undefined {
+  dotenv.config({ path: join(app.getPath('userData'), '.env') })
+
+  return process.env.GEMINI_API_KEY?.trim() || undefined
+}
+
+function isTrustedRenderer(webContents: WebContents): boolean {
+  const rendererUrl = webContents.getURL()
+  if (!is.dev) return rendererUrl.startsWith('file://')
+
+  const configuredUrl = process.env['ELECTRON_RENDERER_URL']
+  if (!configuredUrl) return false
+
+  try {
+    return new URL(rendererUrl).origin === new URL(configuredUrl).origin
+  } catch {
+    return false
+  }
+}
+
+function getGeminiMessage(payload: unknown): string | undefined {
   if (
     typeof payload !== 'object' ||
     payload === null ||
-    !('content' in payload) ||
-    !Array.isArray(payload.content)
+    !('candidates' in payload) ||
+    !Array.isArray(payload.candidates)
   ) {
     return undefined
   }
 
-  const text = payload.content
+  const candidate = payload.candidates[0]
+  if (typeof candidate !== 'object' || candidate === null || !('content' in candidate)) {
+    return undefined
+  }
+  const content = candidate.content
+  if (
+    typeof content !== 'object' ||
+    content === null ||
+    !('parts' in content) ||
+    !Array.isArray(content.parts)
+  ) {
+    return undefined
+  }
+
+  const text = content.parts
     .filter(
-      (block): block is { type: 'text'; text: string } =>
-        typeof block === 'object' &&
-        block !== null &&
-        'type' in block &&
-        block.type === 'text' &&
-        'text' in block &&
-        typeof block.text === 'string'
+      (part): part is { text: string } =>
+        typeof part === 'object' && part !== null && 'text' in part && typeof part.text === 'string'
     )
-    .map((block) => block.text.trim())
+    .map((part) => part.text.trim())
     .filter(Boolean)
     .join('\n')
 
@@ -97,21 +173,155 @@ function createWindow(): void {
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.jarvis.desktop')
 
+  session.defaultSession.setPermissionRequestHandler(
+    (webContents, permission, callback, details) => {
+      const requestsAudioOnly =
+        'mediaTypes' in details &&
+        details.mediaTypes?.includes('audio') === true &&
+        !details.mediaTypes.includes('video')
+      callback(permission === 'media' && requestsAudioOnly && isTrustedRenderer(webContents))
+    }
+  )
+
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
   })
+// Get all saved conversations
+ipcMain.handle('jarvis:get-conversations', async () => {
+  try {
+    return {
+      ok: true,
+      conversations: await readConversations()
+    }
+  } catch (error) {
+    console.error('JARVIS: Failed to load conversations:', error)
 
+    return {
+      ok: false,
+      error: 'Unable to load saved conversations.',
+      conversations: []
+    }
+  }
+})
+
+// Save or update a conversation
+ipcMain.handle(
+  'jarvis:save-conversation',
+  async (_event, conversation: unknown) => {
+    try {
+      if (
+        typeof conversation !== 'object' ||
+        conversation === null ||
+        !('id' in conversation) ||
+        typeof conversation.id !== 'string' ||
+        conversation.id.length > 100 ||
+        !('title' in conversation) ||
+        typeof conversation.title !== 'string' ||
+        conversation.title.length > 200 ||
+        !('messages' in conversation) ||
+        !Array.isArray(conversation.messages) ||
+        conversation.messages.length > 1000
+      ) {
+        return {
+          ok: false,
+          error: 'Invalid conversation data.'
+        }
+      }
+
+      const messages = conversation.messages as StoredMessage[]
+
+      const validMessages = messages.every(
+        (message) =>
+          message &&
+          typeof message === 'object' &&
+          typeof message.id === 'number' &&
+          ['user', 'assistant'].includes(message.role) &&
+          typeof message.content === 'string' &&
+          message.content.length <= 32000
+      )
+
+      if (!validMessages) {
+        return {
+          ok: false,
+          error: 'Invalid conversation messages.'
+        }
+      }
+
+      const conversations = await readConversations()
+      const existingIndex = conversations.findIndex(
+        (item) => item.id === conversation.id
+      )
+
+      const now = Date.now()
+
+      const updatedConversation: Conversation = {
+        id: conversation.id,
+        title: conversation.title.trim() || 'New conversation',
+        messages,
+        createdAt:
+          existingIndex >= 0 ? conversations[existingIndex].createdAt : now,
+        updatedAt: now
+      }
+
+      if (existingIndex >= 0) {
+        conversations[existingIndex] = updatedConversation
+      } else {
+        conversations.unshift(updatedConversation)
+      }
+
+      await writeConversations(conversations)
+
+      return { ok: true }
+    } catch (error) {
+      console.error('JARVIS: Failed to save conversation:', error)
+
+      return {
+        ok: false,
+        error: 'Unable to save conversation.'
+      }
+    }
+  }
+)
+
+// Delete a conversation
+ipcMain.handle(
+  'jarvis:delete-conversation',
+  async (_event, id: unknown) => {
+    try {
+      if (typeof id !== 'string' || id.length > 100) {
+        return { ok: false, error: 'Invalid conversation ID.' }
+      }
+
+      const conversations = await readConversations()
+
+      const updatedConversations = conversations.filter(
+        (conversation) => conversation.id !== id
+      )
+
+      await writeConversations(updatedConversations)
+
+      return { ok: true }
+    } catch (error) {
+      console.error('JARVIS: Failed to delete conversation:', error)
+
+      return {
+        ok: false,
+        error: 'Unable to delete conversation.'
+      }
+    }
+  }
+)
   // Secure IPC test endpoint
   ipcMain.handle('jarvis:get-app-version', () => {
     return app.getVersion()
   })
   ipcMain.handle('jarvis:send-message', async (_event, messages) => {
-    const apiKey = getAnthropicApiKey()
+    const apiKey = getGeminiApiKey()
     if (!apiKey) {
       return {
         ok: false,
         error:
-          'Anthropic API key is missing. Add ANTHROPIC_API_KEY to apps/desktop/.env or the app user-data .env file.'
+          'Gemini API key is missing. Add GEMINI_API_KEY to apps/desktop/.env or the app user-data .env file.'
       }
     }
 
@@ -139,27 +349,44 @@ app.whenReady().then(() => {
     }
 
     try {
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01',
-          'content-type': 'application/json'
+      const model = process.env.GEMINI_MODEL || 'gemini-3.8-flash'
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`
+      const requestBody = JSON.stringify({
+        systemInstruction: {
+          parts: [
+            {
+              text:
+                'You are JARVIS, a helpful personal desktop AI assistant. ' +
+                'You communicate naturally in English, Urdu, and Roman Urdu. ' +
+                'Be clear, practical, respectful, and concise. ' +
+                'Never claim to have controlled the computer or performed an action unless a tool actually did it.'
+            }
+          ]
         },
-        body: JSON.stringify({
-          model: process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-5',
-          max_tokens: 2048,
-          system:
-            'You are JARVIS, a helpful personal desktop AI assistant. ' +
-            'You communicate naturally in English, Urdu, and Roman Urdu. ' +
-            'Be clear, practical, respectful, and concise. ' +
-            'Never claim to have controlled the computer or performed an action unless a tool actually did it.',
-          messages: messages.map((message) => ({
-            role: message.role,
-            content: message.content
-          }))
-        })
+        contents: messages.map((message) => ({
+          role: message.role === 'assistant' ? 'model' : 'user',
+          parts: [{ text: message.content }]
+        })),
+        generationConfig: {
+          maxOutputTokens: 2048
+        }
       })
+      let response: Response
+      let attempt = 0
+      while (true) {
+        response = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'x-goog-api-key': apiKey,
+            'content-type': 'application/json'
+          },
+          body: requestBody
+        })
+
+        if (response.status < 500 || attempt >= 2) break
+        await new Promise((resolve) => setTimeout(resolve, 1000 * 2 ** attempt))
+        attempt += 1
+      }
 
       if (!response.ok) {
         const responseBody = await response.text()
@@ -172,35 +399,39 @@ app.whenReady().then(() => {
 
         if (response.status === 401) {
           throw new Error(
-            'The Anthropic API key is invalid. Check ANTHROPIC_API_KEY in your configuration.'
+            'The Gemini API key is invalid. Check GEMINI_API_KEY in your configuration.'
           )
         }
         if (response.status === 403) {
-          throw new Error(
-            'This Anthropic API key does not have permission to use the selected model.'
-          )
+          throw new Error('This Gemini API key does not have permission to use the selected model.')
         }
         if (response.status === 404) {
           throw new Error(
-            'The Anthropic model was not found. Check ANTHROPIC_MODEL in your configuration.'
+            providerMessage
+              ? `Gemini model "${model}" was not found: ${providerMessage.slice(0, 500)}`
+              : `Gemini model "${model}" was not found. Check GEMINI_MODEL in your configuration.`
           )
         }
         if (response.status === 429) {
           throw new Error(
             providerMessage ||
-              'Anthropic is rate-limiting requests or the API account has reached its usage limit. Check your Anthropic account usage and try again.'
+              'Gemini is rate-limiting requests or the API account has reached its usage limit. Check your Google AI account usage and try again.'
           )
         }
-        if (response.status === 529) {
-          throw new Error('Anthropic is temporarily overloaded. Wait a little and try again.')
+        if (response.status >= 500) {
+          throw new Error(
+            providerMessage
+              ? `Gemini returned HTTP ${response.status}: ${providerMessage.slice(0, 500)}`
+              : `Gemini is temporarily unavailable (HTTP ${response.status}) after 3 attempts. Check Google AI service status and try again.`
+          )
         }
 
-        throw new Error(providerMessage || `The Anthropic API returned HTTP ${response.status}.`)
+        throw new Error(providerMessage || `The Gemini API returned HTTP ${response.status}.`)
       }
 
-      const message = getAnthropicMessage(await response.json())
+      const message = getGeminiMessage(await response.json())
       if (!message) {
-        throw new Error('Anthropic returned an empty or invalid response.')
+        throw new Error('Gemini returned an empty or invalid response.')
       }
 
       return {
@@ -208,16 +439,16 @@ app.whenReady().then(() => {
         message
       }
     } catch (error) {
-      console.error('JARVIS Anthropic request failed:', error)
+      console.error('JARVIS Gemini request failed:', error)
 
       return {
         ok: false,
         error:
           error instanceof TypeError
-            ? 'Could not reach Anthropic. Check your internet connection and try again.'
+            ? 'Could not reach Gemini. Check your internet connection and try again.'
             : error instanceof Error
               ? error.message
-              : 'Anthropic request failed for an unknown reason.'
+              : 'Gemini request failed for an unknown reason.'
       }
     }
   })

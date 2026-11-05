@@ -1,4 +1,4 @@
-﻿{
+{
   "name": "jarvis",
   "version": "1.0.0",
   "private": true,
@@ -8,5 +8,9 @@
   "scripts": {
     "dev": "npm run dev --workspace=@jarvis/desktop",
     "build": "npm run build --workspace=@jarvis/desktop"
+  },
+  "dependencies": {
+    "@google/genai": "^2.32.0",
+    "@langchain/google-genai": "^2.3.4"
   }
 }
