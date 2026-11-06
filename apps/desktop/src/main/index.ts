@@ -399,7 +399,7 @@ ipcMain.handle(
 
         if (response.status === 401) {
           throw new Error(
-            'The Gemini API key is invalid. Check GEMINI_API_KEY in your configuration.'
+            'The Gemini API key is invalid. Check your GEMINI_API_KEY in your configuration.'
           )
         }
         if (response.status === 403) {
