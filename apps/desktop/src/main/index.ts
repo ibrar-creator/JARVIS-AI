@@ -321,7 +321,7 @@ ipcMain.handle(
       return {
         ok: false,
         error:
-          'Gemini API key is missing. Add GEMINI_API_KEY to apps/desktop/.env or the app user-data .env file.'
+          'Gemini API key is missing. Add GEMINI_API_KEY.env or the app user-data .env file.'
       }
     }
 
