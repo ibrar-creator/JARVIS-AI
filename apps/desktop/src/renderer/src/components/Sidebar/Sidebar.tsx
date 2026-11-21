@@ -1,3 +1,4 @@
+
 import {
   Bot,
   MessageSquare,
@@ -5,19 +6,40 @@ import {
   ListTodo,
   Brain,
   Settings,
-  PanelLeftClose
+  PanelLeftClose,
+  Trash2
 } from 'lucide-react'
+
+export interface SidebarConversation {
+  id: string
+  title: string
+  messages: {
+    id: number
+    role: 'user' | 'assistant'
+    content: string
+  }[]
+  createdAt: number
+  updatedAt: number
+}
 
 interface SidebarProps {
   activePage: string
   onNavigate: (page: string) => void
   onNewChat: () => void
+  conversations: SidebarConversation[]
+  activeConversationId: string | null
+  onSelectConversation: (id: string) => void
+  onDeleteConversation: (id: string) => void
 }
 
 function Sidebar({
   activePage,
   onNavigate,
-  onNewChat
+  onNewChat,
+  conversations,
+  activeConversationId,
+  onSelectConversation,
+  onDeleteConversation
 }: SidebarProps): React.JSX.Element {
   const navigation = [
     { id: 'chat', label: 'AI Assistant', icon: MessageSquare },
@@ -66,6 +88,41 @@ function Sidebar({
           )
         })}
       </nav>
+
+      <div className="sidebar-section-label">CHAT HISTORY</div>
+
+      <div className="chat-history-list">
+        {conversations.length === 0 ? (
+          <p className="chat-history-empty">Your conversations will appear here.</p>
+        ) : (
+          conversations.map((conversation) => (
+            <div
+              key={conversation.id}
+              className={`history-item ${
+                activeConversationId === conversation.id ? 'active' : ''
+              }`}
+            >
+              <button
+                className="history-select-button"
+                onClick={() => onSelectConversation(conversation.id)}
+                title={conversation.title}
+              >
+                <MessageSquare size={16} />
+                <span>{conversation.title}</span>
+              </button>
+
+              <button
+                className="history-delete-button"
+                onClick={() => onDeleteConversation(conversation.id)}
+                title="Delete conversation"
+                aria-label={`Delete ${conversation.title}`}
+              >
+                <Trash2 size={15} />
+              </button>
+            </div>
+          ))
+        )}
+      </div>
 
       <div className="sidebar-bottom">
         <div className="sidebar-user">
