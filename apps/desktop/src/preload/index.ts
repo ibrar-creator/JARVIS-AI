@@ -18,7 +18,11 @@ type AIResponse = {
   message?: string
   error?: string
 }
-
+type AudioTranscriptionResponse = {
+  ok: boolean
+  transcript?: string
+  error?: string
+}
 type Conversation = {
   id: string
   title: string
@@ -46,7 +50,18 @@ const jarvisApi = {
   sendMessage: (messages: ChatMessage[]): Promise<AIResponse> => {
     return ipcRenderer.invoke('jarvis:send-message', messages)
   },
-
+transcribeAudio: (
+  audioBase64: string,
+  mimeType: string,
+  language: string
+): Promise<AudioTranscriptionResponse> => {
+  return ipcRenderer.invoke(
+    'jarvis:transcribe-audio',
+    audioBase64,
+    mimeType,
+    language
+  )
+},
   getConversations: (): Promise<ConversationResult> => {
     return ipcRenderer.invoke('jarvis:get-conversations')
   },

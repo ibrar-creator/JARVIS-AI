@@ -349,7 +349,7 @@ ipcMain.handle(
     }
 
     try {
-      const model = process.env.GEMINI_MODEL || 'gemini-3.8-flash'
+      const model = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite'
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`
       const requestBody = JSON.stringify({
         systemInstruction: {
@@ -452,6 +452,121 @@ ipcMain.handle(
       }
     }
   })
+
+  // Transcribe microphone audio using Gemini
+  ipcMain.handle(
+    'jarvis:transcribe-audio',
+    async (_event, audioBase64: unknown, mimeType: unknown, language: unknown) => {
+      const apiKey = getGeminiApiKey()
+
+      if (!apiKey) {
+        return {
+          ok: false,
+          error: 'Gemini API key is missing. Check your configuration.'
+        }
+      }
+
+      if (
+        typeof audioBase64 !== 'string' ||
+        audioBase64.length === 0 ||
+        audioBase64.length > 15_000_000
+      ) {
+        return { ok: false, error: 'Invalid audio data or recording is too large.' }
+      }
+
+      const supportedMimeTypes = [
+        'audio/webm',
+        'audio/webm;codecs=opus',
+        'audio/ogg',
+        'audio/mp4',
+        'audio/wav'
+      ]
+
+      if (
+        typeof mimeType !== 'string' ||
+        !supportedMimeTypes.includes(mimeType)
+      ) {
+        return { ok: false, error: 'Unsupported audio format.' }
+      }
+
+      const languageNames: Record<string, string> = {
+        'en-US': 'English',
+        'ur-PK': 'Urdu',
+        'roman-ur': 'Roman Urdu'
+      }
+
+      if (typeof language !== 'string' || !languageNames[language]) {
+        return { ok: false, error: 'Unsupported voice language.' }
+      }
+
+      try {
+        const model = process.env.GEMINI_AUDIO_MODEL || 'gemini-3.5-flash-lite'
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`
+
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'x-goog-api-key': apiKey,
+            'content-type': 'application/json'
+          },
+          body: JSON.stringify({
+            contents: [
+              {
+                role: 'user',
+                parts: [
+                  {
+                    text:
+                      `Transcribe the audio accurately. The expected language is ${languageNames[language]}. ` +
+                      'Return only the spoken words. Do not answer, explain, translate, or summarize.'
+                  },
+                  {
+                    inline_data: {
+                      mime_type: mimeType.split(';')[0],
+                      data: audioBase64
+                    }
+                  }
+                ]
+              }
+            ],
+            generationConfig: {
+              temperature: 0,
+              maxOutputTokens: 1024
+            }
+          })
+        })
+
+        const data = await response.json()
+
+        if (!response.ok) {
+          const providerMessage = getProviderErrorMessage(data)
+          throw new Error(
+            providerMessage || `Gemini audio request failed (HTTP ${response.status}).`
+          )
+        }
+
+        const transcript = getGeminiMessage(data)?.trim()
+
+        if (!transcript) {
+          throw new Error('Gemini could not recognize speech. Please try again.')
+        }
+
+        return {
+          ok: true,
+          transcript
+        }
+      } catch (error) {
+        console.error('JARVIS audio transcription failed:', error)
+
+        return {
+          ok: false,
+          error:
+            error instanceof Error
+              ? error.message
+              : 'Audio transcription failed.'
+        }
+      }
+    }
+  )
 
   createWindow()
 

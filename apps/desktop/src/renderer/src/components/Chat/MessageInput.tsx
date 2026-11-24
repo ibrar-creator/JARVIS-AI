@@ -1,36 +1,8 @@
+
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { ArrowUp, Mic, MicOff, Plus, Volume2, VolumeX } from 'lucide-react'
 
 export type VoiceLanguage = 'en-US' | 'ur-PK' | 'roman-ur'
-
-interface RecognitionResult {
-  isFinal: boolean
-  0: {
-    transcript: string
-  }
-}
-
-interface RecognitionResultEvent {
-  resultIndex: number
-  results: ArrayLike<RecognitionResult>
-}
-
-interface RecognitionErrorEvent {
-  error: string
-}
-
-interface SpeechRecognitionLike {
-  lang: string
-  interimResults: boolean
-  maxAlternatives: number
-  onresult: ((event: RecognitionResultEvent) => void) | null
-  onerror: ((event: RecognitionErrorEvent) => void) | null
-  onend: (() => void) | null
-  start: () => void
-  stop: () => void
-}
-
-type SpeechRecognitionConstructor = new () => SpeechRecognitionLike
 
 interface MessageInputProps {
   onSend: (message: string) => void
@@ -41,14 +13,30 @@ interface MessageInputProps {
   voiceOutputError?: string
 }
 
-function getRecognitionError(error: string): string {
-  if (error === 'not-allowed' || error === 'service-not-allowed') {
-    return 'Microphone access was denied. Allow microphone access in your system settings and try again.'
-  }
-  if (error === 'no-speech') return 'No speech detected. Try speaking closer to the microphone.'
-  if (error === 'network')
-    return 'Voice recognition needs an internet connection. Check your connection and try again.'
-  return `Voice recognition failed (${error}). Try again.`
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+
+    reader.onloadend = () => {
+      if (typeof reader.result !== 'string') {
+        reject(new Error('Could not read recorded audio.'))
+        return
+      }
+
+      const commaIndex = reader.result.indexOf(',')
+
+      if (commaIndex === -1) {
+        reject(new Error('Invalid audio recording.'))
+        return
+      }
+
+      resolve(reader.result.slice(commaIndex + 1))
+    }
+
+    reader.onerror = () => reject(new Error('Failed to process audio recording.'))
+
+    reader.readAsDataURL(blob)
+  })
 }
 
 function MessageInput({
@@ -61,13 +49,25 @@ function MessageInput({
 }: MessageInputProps): React.JSX.Element {
   const [message, setMessage] = useState('')
   const [isListening, setIsListening] = useState(false)
+  const [isTranscribing, setIsTranscribing] = useState(false)
   const [voiceInputError, setVoiceInputError] = useState<string>()
-  const recognitionRef = useRef<SpeechRecognitionLike | null>(null)
+
+  const recorderRef = useRef<MediaRecorder | null>(null)
+  const streamRef = useRef<MediaStream | null>(null)
+  const chunksRef = useRef<Blob[]>([])
 
   useEffect(() => {
     return () => {
-      recognitionRef.current?.stop()
-      recognitionRef.current = null
+      const recorder = recorderRef.current
+
+      if (recorder && recorder.state !== 'inactive') {
+        recorder.stop()
+      }
+
+      streamRef.current?.getTracks().forEach((track) => track.stop())
+
+      recorderRef.current = null
+      streamRef.current = null
     }
   }, [])
 
@@ -87,69 +87,129 @@ function MessageInput({
     }
   }
 
-  const toggleListening = (): void => {
-    if (recognitionRef.current) {
-      recognitionRef.current.stop()
-      return
-    }
-
-    const speechWindow = window as Window & {
-      SpeechRecognition?: SpeechRecognitionConstructor
-      webkitSpeechRecognition?: SpeechRecognitionConstructor
-    }
-    const Recognition = speechWindow.SpeechRecognition || speechWindow.webkitSpeechRecognition
-
-    if (!Recognition) {
-      setVoiceInputError('Voice input is not supported by this app runtime.')
-      return
-    }
-
+  const startRecording = async (): Promise<void> => {
     setVoiceInputError(undefined)
 
-    const recognition = new Recognition()
-    recognition.lang = voiceLanguage === 'en-US' ? 'en-US' : 'ur-PK'
-    recognition.interimResults = false
-    recognition.maxAlternatives = 1
-    recognition.onresult = (event) => {
-      const transcript = Array.from({ length: event.results.length }, (_, index) => {
-        const result = event.results[index]
-        return index >= event.resultIndex && result.isFinal ? result[0].transcript.trim() : ''
-      })
-        .filter(Boolean)
-        .join(' ')
-
-      if (transcript) {
-        setMessage(
-          (current) => `${current}${current && !/\s$/.test(current) ? ' ' : ''}${transcript}`
-        )
-      }
-    }
-    recognition.onerror = (event) => {
-      setVoiceInputError(getRecognitionError(event.error))
-    }
-    recognition.onend = () => {
-      if (recognitionRef.current === recognition) {
-        recognitionRef.current = null
-        setIsListening(false)
-      }
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      setVoiceInputError('Audio recording is not supported by this app runtime.')
+      return
     }
 
-    recognitionRef.current = recognition
+    let stream: MediaStream | undefined
+
     try {
-      recognition.start()
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+
+      const supportedTypes = [
+        'audio/webm;codecs=opus',
+        'audio/webm',
+        'audio/mp4'
+      ]
+
+      const selectedType = supportedTypes.find((type) =>
+        MediaRecorder.isTypeSupported(type)
+      )
+
+      const recorder = selectedType
+        ? new MediaRecorder(stream, { mimeType: selectedType })
+        : new MediaRecorder(stream)
+
+      streamRef.current = stream
+      recorderRef.current = recorder
+      chunksRef.current = []
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          chunksRef.current.push(event.data)
+        }
+      }
+
+      recorder.onerror = () => {
+        setVoiceInputError('Audio recording failed. Please try again.')
+      }
+
+      recorder.onstop = async () => {
+        const audioBlob = new Blob(chunksRef.current, {
+          type: recorder.mimeType || 'audio/webm'
+        })
+
+        streamRef.current?.getTracks().forEach((track) => track.stop())
+        streamRef.current = null
+        recorderRef.current = null
+        chunksRef.current = []
+
+        setIsListening(false)
+
+        if (audioBlob.size === 0) {
+          setVoiceInputError('No audio was recorded. Please try again.')
+          return
+        }
+
+        setIsTranscribing(true)
+        setVoiceInputError(undefined)
+
+        try {
+          const audioBase64 = await blobToBase64(audioBlob)
+          const mimeType = audioBlob.type.split(';')[0] || 'audio/webm'
+
+          const result = await window.jarvis.transcribeAudio(
+            audioBase64,
+            mimeType,
+            voiceLanguage
+          )
+
+          if (!result.ok || !result.transcript) {
+            throw new Error(result.error || 'Could not recognize your speech.')
+          }
+
+          setMessage((current) =>
+            `${current}${current && !/\s$/.test(current) ? ' ' : ''}${result.transcript}`
+          )
+        } catch (error) {
+          setVoiceInputError(
+            error instanceof Error
+              ? error.message
+              : 'Audio transcription failed. Please try again.'
+          )
+        } finally {
+          setIsTranscribing(false)
+        }
+      }
+
+      recorder.start()
       setIsListening(true)
     } catch (error) {
-      recognitionRef.current = null
+      stream?.getTracks().forEach((track) => track.stop())
+
+      recorderRef.current = null
+      streamRef.current = null
       setIsListening(false)
+
       setVoiceInputError(
         error instanceof Error
-          ? `Could not start voice input: ${error.message}`
-          : 'Could not start voice input.'
+          ? `Could not access microphone: ${error.message}`
+          : 'Could not access your microphone.'
       )
     }
   }
 
-  const voiceStatus = voiceInputError || voiceOutputError
+  const toggleListening = (): void => {
+    const recorder = recorderRef.current
+
+    if (recorder && recorder.state === 'recording') {
+      recorder.stop()
+      return
+    }
+
+    if (!isTranscribing) {
+      void startRecording()
+    }
+  }
+
+  const voiceStatus =
+    voiceInputError ||
+    voiceOutputError ||
+    (isTranscribing ? 'Transcribing your voice with Gemini...' : undefined)
 
   return (
     <div className="message-input-wrapper">
@@ -167,13 +227,19 @@ function MessageInput({
             <button className="input-tool-button" title="More tools" aria-label="More tools">
               <Plus size={19} />
             </button>
+
             <label className="voice-language-control">
               <span>Voice</span>
               <select
                 value={voiceLanguage}
                 onChange={(event) => {
                   const language = event.currentTarget.value
-                  if (language === 'en-US' || language === 'ur-PK' || language === 'roman-ur') {
+
+                  if (
+                    language === 'en-US' ||
+                    language === 'ur-PK' ||
+                    language === 'roman-ur'
+                  ) {
                     onVoiceLanguageChange(language)
                   }
                 }}
@@ -190,7 +256,14 @@ function MessageInput({
             <button
               className={`input-tool-button microphone-button${isListening ? ' is-listening' : ''}`}
               onClick={toggleListening}
-              title={isListening ? 'Stop voice input' : 'Start voice input'}
+              disabled={isTranscribing}
+              title={
+                isTranscribing
+                  ? 'Transcribing audio'
+                  : isListening
+                    ? 'Stop voice input'
+                    : 'Start voice input'
+              }
               aria-label={isListening ? 'Stop voice input' : 'Start voice input'}
               aria-pressed={isListening}
             >

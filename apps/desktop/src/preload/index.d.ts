@@ -17,7 +17,11 @@ type AIResponse = {
   message?: string
   error?: string
 }
-
+type AudioTranscriptionResponse = {
+  ok: boolean
+  transcript?: string
+  error?: string
+}
 type Conversation = {
   id: string
   title: string
@@ -41,7 +45,11 @@ interface JarvisAPI {
   getAppVersion: () => Promise<string>
 
   sendMessage: (messages: ChatRequestMessage[]) => Promise<AIResponse>
-
+transcribeAudio: (
+  audioBase64: string,
+  mimeType: string,
+  language: string
+) => Promise<AudioTranscriptionResponse>
   getConversations: () => Promise<ConversationResult>
 
   saveConversation: (
