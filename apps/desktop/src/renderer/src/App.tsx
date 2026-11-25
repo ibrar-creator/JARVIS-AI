@@ -3,7 +3,7 @@ import Sidebar, { type SidebarConversation } from './components/Sidebar/Sidebar'
 import ChatWindow, { type ChatMessage } from './components/Chat/ChatWindow'
 import SystemStatus from './components/Status/SystemStatus'
 import { Brain, ListTodo, Settings } from 'lucide-react'
-
+import VoiceMode from './components/Voice/VoiceMode'
 function createConversationId(): string {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
     return crypto.randomUUID()
@@ -128,7 +128,7 @@ function App(): React.JSX.Element {
     )
   }
 
-  const handleSendMessage = async (content: string): Promise<void> => {
+  const handleSendMessage = async (content: string, returnToVoice = false): Promise<void> => {
     const trimmedContent = content.trim()
 
     if (!trimmedContent || isLoading || isHistoryLoading) return
@@ -160,7 +160,7 @@ function App(): React.JSX.Element {
 
     setActiveConversationId(conversationId)
     setMessages(updatedMessages)
-    setActivePage('chat')
+    setActivePage(returnToVoice ? 'voice' : 'chat')
     setIsLoading(true)
 
     try {
@@ -463,24 +463,30 @@ function App(): React.JSX.Element {
       />
 
       <div className="main-panel">
-        {activePage === 'chat' ? (
-          <ChatWindow
-            messages={messages}
-            onSend={handleSendMessage}
-            onRegenerate={handleRegenerateResponse}
-             onEditMessage={handleEditMessage}
-            isLoading={isLoading || isHistoryLoading}
-          />
-        ) : (
-          <main className="placeholder-page">
-            <div className="placeholder-icon">{PageIcon && <PageIcon size={30} />}</div>
-
-            <h1>{currentPage?.title}</h1>
-            <p>{currentPage?.description}</p>
-
-            <span className="coming-soon">COMING IN A FUTURE PHASE</span>
-          </main>
-        )}
+       {activePage === 'chat' ? (
+  <ChatWindow
+    messages={messages}
+    onSend={handleSendMessage}
+    onRegenerate={handleRegenerateResponse}
+    onEditMessage={handleEditMessage}
+    isLoading={isLoading || isHistoryLoading}
+  />
+) : activePage === 'voice' ? (
+  <VoiceMode
+    messages={messages}
+    onSend={(content) => handleSendMessage(content, true)}
+    isLoading={isLoading || isHistoryLoading}
+  />
+) : (
+  <main className="placeholder-page">
+    <div className="placeholder-icon">
+      {PageIcon && <PageIcon size={30} />}
+    </div>
+    <h1>{currentPage?.title}</h1>
+    <p>{currentPage?.description}</p>
+    <span className="coming-soon">COMING IN A FUTURE PHASE</span>
+  </main>
+)}
 
         <footer className="app-footer">
           <SystemStatus />

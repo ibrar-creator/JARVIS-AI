@@ -7,7 +7,8 @@ import {
   Brain,
   Settings,
   PanelLeftClose,
-  Trash2
+  Trash2,
+  AudioLines
 } from 'lucide-react'
 
 export interface SidebarConversation {
@@ -43,6 +44,7 @@ function Sidebar({
 }: SidebarProps): React.JSX.Element {
   const navigation = [
     { id: 'chat', label: 'AI Assistant', icon: MessageSquare },
+    { id: 'voice', label: 'Voice Mode', icon: AudioLines },
     { id: 'tasks', label: 'Tasks', icon: ListTodo },
     { id: 'memory', label: 'Memory', icon: Brain },
     { id: 'settings', label: 'Settings', icon: Settings }
